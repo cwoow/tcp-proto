@@ -8,8 +8,9 @@ server.bind(('127.0.0.1', 1234))
 
 state = 0
 def reply(ip, tcp):
-    buf = tcp.get_packet()
+    buf = tcp.get_packet()[:20]
     buf = [n for n in buf]
+    buf[12] = 80
     buf = bytes(buf)
     tcp = TCP(buf)
 
