@@ -6,3 +6,4 @@ iptables 防火墙工具，过滤数据包
     iptables -A OUTPUT -p tcp -dport 50000 --tcp-flags RST RST -j DROP
     -I 插入(insert)规则 -A 添加(append)规则 -D 删除(delete)规则
 
+* 收到 seq=3425881730、2852968954 相当于 seq=0 ?

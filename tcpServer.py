@@ -7,4 +7,5 @@ server.listen()
 
 while True:
     conn, addr = server.accept()
-    pass
+    data = conn.recv(4096)
+    print(data)
