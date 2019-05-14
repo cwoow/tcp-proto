@@ -1,5 +1,6 @@
-
+import time
 import socket
+
 from impacket.ImpactPacket import IP, TCP 
 
 class RawSocket():
@@ -21,6 +22,10 @@ class RawSocket():
         self.src_addr = None
         self.dst_addr = None
         self._state = self.CLOSED
+        self._seq = 0
+
+    def isOpen(self):
+        return self._state == self.ESTABLISHED
 
     def bind(self, addr):
         self.sock.bind(addr)
@@ -28,63 +33,93 @@ class RawSocket():
         self._state = self.LISTEN
 
     def accept(self):
-        if self._state != self.CLOSED:
+        # 等待客户端连接, 三次握手
+        if self._state != self.LISTEN:
             raise Exception("worng state:", self._state)
         while True:
-            ip, tcp, addr = self.recv()
-            if self._state == self.LISTEN and tcp.get_SYN():
+            ip, tcp, addr, data = self._recv()
+            if self._state == self.LISTEN and tcp.get_SYN():    # 开始握手
                 self.dst_addr = tuple(addr)
-                ack = self.get_th_seq()+1
-                self.send(seq=0, ack=ack, SYN=1)
+                ack = tcp.get_th_seq()+1
+                self._send(seq=0, ack=ack, SYN=1, ACK=1)
                 self._state = self.SYN_RCVD
-            if self._state == self.SYN_RCVD and tcp.get_ACK():
+            if self._state == self.SYN_RCVD and tcp.get_ACK():  # 连接成功
                 self._state = self.ESTABLISHED
                 return addr
 
     def close(self):
-        self.send(ACK=1, FIN=1)
+        # 主动断开连接
+        self._send(ACK=1, FIN=1)
         self._state = self.FIN_WAIT_1
         while True:
-            ip, tcp, addr = self.recv()
-            break
+            ip, tcp, addr, data = self._recv()
+            if self._state == self.FIN_WAIT_1 and tcp.get_ACK():
+                self._state = self.FIN_WAIT_2
+            if self._state == self.FIN_WAIT_2 and tcp.get_FIN():
+                ack = tcp.get_th_seq() + 1
+                self._send(ACK=1, ack=ack)
+                self._state = self.TIME_WAIT
+                time.sleep(1)
+                self._state = self.CLOSED
+                print("closed")
+                return
 
-
-    def beclose(self):
-        ack = self.get_th_seq()
-        self.send(ACK=1)
+    def beclose(self, ip, tcp, addr):
+        # 被动断开连接
+        ack = tcp.get_th_seq()
+        self._send(ACK=1)
         self._state = self.CLOSE_WAIT
-        self.send(ACK=1, FIN=1)
+        self._send(ACK=1, FIN=1)
         self._state = self.LAST_ACK
-        ip, tcp, addr = self.recv()
-        if tcp.get_ACK():
-            self._state = self.CLOSED
+        while True:
+            ip, tcp, addr, data = self._recv()
+            if tcp.get_ACK():
+                self._state = self.CLOSED
+                print("closed")
+                return
+        
 
-
-    def checkFin(func):
-        def decorater(self):
-            def wraper(*args, **kws):
-                ip, tcp, addr = func(*args, **kws)
-                if self._state == self.ESTABLISHED and tcp.get_FIN():
-                    self.beclose()
-                return ip, tcp, addr
-            return wraper
-        return decorater
-
-    @checkFin
     def recv(self):
+        ip, tcp, addr, data = self._recv()
+        print(data, len(data))
+        ip_len = ip.get_size()
+        tcp_len = tcp.get_size()
+        head_len = (ip_len+tcp_len)
+        msg = data[head_len:]
+        data_len = len(data) - head_len
+        #print(msg)
+        ack = tcp.get_th_seq() + data_len
+        self._send(ack=ack, ACK=1)
+        return msg
+
+    def watchon(func):
+        def wraper(self, *args, **kws):
+            ip, tcp, addr, data = func(self, *args, **kws)
+            if self._state == self.ESTABLISHED and tcp.get_FIN():
+                self.beclose(ip, tcp, addr, data)
+            #print(addr, tcp)
+            return ip, tcp, addr, data
+        return wraper
+
+    @watchon
+    def _recv(self):
         while True:
             data, addr = self.sock.recvfrom(4096)
-            if self.dst_addr is not None and self.dst_addr != tuple(addr):
-                continue
             ip = IP(data)
             ip_len = ip.get_size()
             tcp = TCP(data[ip_len:])
-            return ip, tcp, addr
+            if tcp.get_th_dport() != self.src_addr[1]:
+                continue
+            addr = (ip.get_ip_src(), tcp.get_th_sport())
+            if self.dst_addr is not None and self.dst_addr != tuple(addr):
+                continue
+            print('recv ', tcp, tcp.get_th_seq(), tcp.get_th_ack())
+            return ip, tcp, addr, data
 
-    def send(self, msg=None, seq=0, ack=0, SYN=0, ACK=0, PSH=0, FIN=0):
+    def _send(self, msg=None, seq=0, ack=0, SYN=0, ACK=0, PSH=0, FIN=0):
         ip, tcp = self.init_head()
         if seq:
-            tcp.set_th_seq(seq)
+            tcp.set_th_seq(self._seq)
         if ack:
             tcp.set_th_ack(ack)
         if SYN:
@@ -102,6 +137,7 @@ class RawSocket():
             if not isinstance(msg, bytes):
                 raise Exception('msg type error')
             buf += msg
+        print("send ", tcp, tcp.get_th_seq(), tcp.get_th_ack())
         self.sock.sendto(buf, self.dst_addr)
         
     def init_ip(self):
@@ -122,89 +158,12 @@ class RawSocket():
         ip.contains(tcp)
         return ip, tcp
 
-    def swap(self, ip, tcp):
-        src_ip = self.ip.get_ip_src()
-        dst_ip = self.ip.get_ip_dst()
-
-server = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_TCP)
-server.setsockopt(socket.SOL_IP, socket.IP_HDRINCL, 1)
-server.bind(('127.0.0.1', 1234))
-
-state = 0
-def reply(ip, tcp):
-    buf = tcp.get_packet()
-    buf = [n for n in buf]
-    buf = bytes(buf)
-    tcp = TCP(buf)
-
-    ip.contains(tcp)
-    tcp.swapSourceAndDestination()
-    return ip, tcp
-
-
-while True:
-    data, addr = server.recvfrom(4096)
-    #print(addr, data)
-    ip = IP(data)
-    ip.get_ip_src()
-    ip.get_ip_dst()
+if __name__ == '__main__':
+    server = RawSocket()
+    server.bind(('127.0.0.1', 1234))
+    addr = server.accept()
+    print('connected ...\n ')
+    while server.isOpen():
+        msg = server.recv()
+        print(msg)
     
-    ip_len = ip.get_size()
-    tcp = TCP(data[ip_len:])
-    if tcp.get_th_dport() == 1234:
-        print('state', state)
-        #buf = tcp.get_packet()
-        #print([hex(n)[2:] for n in buf])
-        print(tcp, tcp.get_th_seq(), tcp.get_th_ack())
-        if state == 0:
-            ip, tcp = reply(ip, tcp)
-            tcp.set_th_ack(tcp.get_th_seq()+1)
-            tcp.set_th_seq(0)
-            #print('###', tcp.get_th_seq())
-            tcp.set_ACK()
-            tcp.calculate_checksum()
-            buf = ip.get_packet()
-            print(tcp, tcp.get_th_seq(), tcp.get_th_ack())
-            server.sendto(buf, ('127.0.0.1', 0))
-            state = 1
-        elif state == 1:
-            if tcp.get_SYN() or not tcp.get_ACK():
-                break
-            print('connected...')
-            state = 2
-        elif state == 2:
-            if tcp.get_FIN():
-                ip, tcp = reply(ip, tcp)
-                tcp.set_th_ack(tcp.get_th_seq()+data_len)
-                tcp.set_th_seq(1)
-                tcp.reset_FIN()
-                buf = ip.get_packet()
-                print(tcp, tcp.get_th_seq(), tcp.get_th_ack())
-                server.sendto(buf, ('127.0.0.1', 0))
-                
-                tcp.set_FIN()
-                buf = ip.get_packet()
-                print(tcp, tcp.get_th_seq(), tcp.get_th_ack())
-                server.sendto(buf, ('127.0.0.1', 0))
-
-                state = 3
-            else:
-                tcp_len = tcp.get_size()
-                head_len = (ip_len+tcp_len)
-                msg = data[head_len:]
-                data_len = len(data) - head_len
-                print(msg)
-                ip, tcp = reply(ip, tcp)
-                tcp.set_ACK()
-                tcp.reset_PSH()
-                tcp.set_th_ack(tcp.get_th_seq()+data_len)
-                tcp.set_th_seq(1)
-                tcp.calculate_checksum()
-                buf = ip.get_packet()
-                print(tcp, tcp.get_th_seq(), tcp.get_th_ack())
-                server.sendto(buf, ('127.0.0.1', 0))
-        elif state == 3:
-            print('closed...')
-            break
-
-        print('\n')
