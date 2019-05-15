@@ -23,6 +23,7 @@ class RawSocket():
         self.dst_addr = None
         self._state = self.CLOSED
         self._seq = 0
+        self._ack = 0
 
     def isOpen(self):
         return self._state == self.ESTABLISHED
@@ -40,10 +41,11 @@ class RawSocket():
             ip, tcp, addr, data = self._recv()
             if self._state == self.LISTEN and tcp.get_SYN():    # 开始握手
                 self.dst_addr = tuple(addr)
-                ack = tcp.get_th_seq()+1
-                self._send(seq=0, ack=ack, SYN=1, ACK=1)
+                self._ack = tcp.get_th_seq()+1  # 消耗一个ack
+                self._send(SYN=1, ACK=1)
+                self._seq += 1  # 消耗一个seq
                 self._state = self.SYN_RCVD
-            if self._state == self.SYN_RCVD and tcp.get_ACK():  # 连接成功
+            if self._state == self.SYN_RCVD and tcp.get_ACK() and tcp.get_th_seq() == self._ack:  # 连接成功
                 self._state = self.ESTABLISHED
                 return addr
 
@@ -56,15 +58,15 @@ class RawSocket():
             if self._state == self.FIN_WAIT_1 and tcp.get_ACK():
                 self._state = self.FIN_WAIT_2
             if self._state == self.FIN_WAIT_2 and tcp.get_FIN():
-                ack = tcp.get_th_seq() + 1
-                self._send(ACK=1, ack=ack)
+                self._ack = tcp.get_th_seq() + 1
+                self._send(ACK=1)
                 self._state = self.TIME_WAIT
                 time.sleep(1)
                 self._state = self.CLOSED
-                print("closed")
+                print("closed...")
                 return
 
-    def beclose(self, ip, tcp, addr):
+    def beclose(self, ip, tcp, addr, data):
         # 被动断开连接
         ack = tcp.get_th_seq()
         self._send(ACK=1)
@@ -75,11 +77,13 @@ class RawSocket():
             ip, tcp, addr, data = self._recv()
             if tcp.get_ACK():
                 self._state = self.CLOSED
-                print("closed")
+                print("closed...")
                 return
         
 
     def recv(self):
+        if not self._state == self.ESTABLISHED:
+            raise Exception('no connection', self._state)
         ip, tcp, addr, data = self._recv()
         print(data, len(data))
         ip_len = ip.get_size()
@@ -88,9 +92,27 @@ class RawSocket():
         msg = data[head_len:]
         data_len = len(data) - head_len
         #print(msg)
-        ack = tcp.get_th_seq() + data_len
-        self._send(ack=ack, ACK=1)
+        self._ack = tcp.get_th_seq() + data_len
+        self._send(ACK=1)
         return msg
+
+    def send(self, msg):
+        
+        if msg is not None:
+            if isinstance(msg, str):
+                msg = msg.encode()
+            if not isinstance(msg, bytes):
+                raise Exception('msg type error')
+            while True:
+                msg = b''
+                self._send(msg, ACK=1, PSH=1)
+                ip, tcp, addr, data = self._recv()
+                if tcp.get_ACK() and tcp.get_th_ack() == self._seq+len(msg):
+                    break
+                else:
+                    time.sleep(1)
+            self._seq += len(msg)
+            
 
     def watchon(func):
         def wraper(self, *args, **kws):
@@ -116,12 +138,11 @@ class RawSocket():
             print('recv ', tcp, tcp.get_th_seq(), tcp.get_th_ack())
             return ip, tcp, addr, data
 
-    def _send(self, msg=None, seq=0, ack=0, SYN=0, ACK=0, PSH=0, FIN=0):
+    def _send(self, msg=None, SYN=0, ACK=0, PSH=0, FIN=0):
         ip, tcp = self.init_head()
-        if seq:
-            tcp.set_th_seq(self._seq)
-        if ack:
-            tcp.set_th_ack(ack)
+        tcp.set_th_win(43690)   #这个很重要
+        tcp.set_th_seq(self._seq)
+        tcp.set_th_ack(self._ack)
         if SYN:
             tcp.set_SYN()
         if ACK:
@@ -130,13 +151,11 @@ class RawSocket():
             tcp.set_PSH()
         if FIN:
             tcp.set_FIN()
+        
         buf = ip.get_packet()
         if msg is not None:
-            if isinstance(msg, str):
-                msg = msg.encode()
-            if not isinstance(msg, bytes):
-                raise Exception('msg type error')
             buf += msg
+            print(buf, len(buf))
         print("send ", tcp, tcp.get_th_seq(), tcp.get_th_ack())
         self.sock.sendto(buf, self.dst_addr)
         
@@ -166,4 +185,5 @@ if __name__ == '__main__':
     while server.isOpen():
         msg = server.recv()
         print(msg)
+        server.send(msg)
     

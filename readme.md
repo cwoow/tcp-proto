@@ -1,5 +1,8 @@
 
 tcpdump 侦听tcp包，类似wireshark
+    sudo tcpdump '(tcp[13] & 4 = 0) and (port 1234)' -i lo
+    sudo tcpdump tcp port 1234 -i lo
+
 iptables 防火墙工具，过滤数据包
 过滤RST包  
     sudo iptables -I INPUT -p tcp --tcp-flags SYN,FIN,RST,URG,PSH RST -j DROP
