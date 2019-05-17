@@ -1,7 +1,7 @@
 import time
 import socket
 
-from impacket.ImpactPacket import IP, TCP 
+from impacket.ImpactPacket import IP, TCP, Data
 
 class RawSocket():
     CLOSED = 0          # 初始状态
@@ -78,6 +78,7 @@ class RawSocket():
             if tcp.get_ACK():
                 self._state = self.CLOSED
                 print("closed...")
+                #raise Exception('closed!')
                 return
         
 
@@ -85,7 +86,7 @@ class RawSocket():
         if not self._state == self.ESTABLISHED:
             raise Exception('no connection', self._state)
         ip, tcp, addr, data = self._recv()
-        print(data, len(data))
+        #print(data, len(data))
         ip_len = ip.get_size()
         tcp_len = tcp.get_size()
         head_len = (ip_len+tcp_len)
@@ -104,7 +105,6 @@ class RawSocket():
             if not isinstance(msg, bytes):
                 raise Exception('msg type error')
             while True:
-                msg = b''
                 self._send(msg, ACK=1, PSH=1)
                 ip, tcp, addr, data = self._recv()
                 if tcp.get_ACK() and tcp.get_th_ack() == self._seq+len(msg):
@@ -151,11 +151,10 @@ class RawSocket():
             tcp.set_PSH()
         if FIN:
             tcp.set_FIN()
-        
-        buf = ip.get_packet()
         if msg is not None:
-            buf += msg
-            print(buf, len(buf))
+            data = Data(msg)
+            tcp.contains(data)
+        buf = ip.get_packet()
         print("send ", tcp, tcp.get_th_seq(), tcp.get_th_ack())
         self.sock.sendto(buf, self.dst_addr)
         
@@ -184,6 +183,9 @@ if __name__ == '__main__':
     print('connected ...\n ')
     while server.isOpen():
         msg = server.recv()
-        print(msg)
-        server.send(msg)
+        if msg:
+            print(msg)
+            server.send(msg)
+            print(msg)
+    print('bye....')
     
