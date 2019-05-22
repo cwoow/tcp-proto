@@ -83,18 +83,22 @@ class RawSocket():
         
 
     def recv(self):
-        if not self._state == self.ESTABLISHED:
-            raise Exception('no connection', self._state)
-        ip, tcp, addr, data = self._recv()
-        #print(data, len(data))
-        ip_len = ip.get_size()
-        tcp_len = tcp.get_size()
-        head_len = (ip_len+tcp_len)
-        msg = data[head_len:]
-        data_len = len(data) - head_len
-        #print(msg)
-        self._ack = tcp.get_th_seq() + data_len
-        self._send(ACK=1)
+        msg = b''
+        while True:
+            if not self._state == self.ESTABLISHED:
+                raise Exception('no connection', self._state)
+            ip, tcp, addr, data = self._recv()
+            #print(data, len(data))
+            ip_len = ip.get_size()
+            tcp_len = tcp.get_size()
+            head_len = (ip_len+tcp_len)
+            msg += data[head_len:]
+            data_len = len(data) - head_len
+            #print(msg)
+            self._ack = tcp.get_th_seq() + data_len
+            self._send(ACK=1)
+            if tcp.get_PSH():
+                break
         return msg
 
     def send(self, msg):
@@ -138,9 +142,9 @@ class RawSocket():
             print('recv ', tcp, tcp.get_th_seq(), tcp.get_th_ack())
             return ip, tcp, addr, data
 
-    def _send(self, msg=None, SYN=0, ACK=0, PSH=0, FIN=0):
+    def _send(self, msg=None, win=10, SYN=0, ACK=0, PSH=0, FIN=0):
         ip, tcp = self.init_head()
-        tcp.set_th_win(43690)   #这个很重要
+        tcp.set_th_win(win)   #这个很重要
         tcp.set_th_seq(self._seq)
         tcp.set_th_ack(self._ack)
         if SYN:
