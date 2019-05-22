@@ -49,6 +49,23 @@ class RawSocket():
                 self._state = self.ESTABLISHED
                 return addr
 
+    def connect(self, dst_addr):
+        self.sock.bind(('127.0.0.1', 0)) # bind端口0，系统会自动分配一个端口
+        self.src_addr = self.sock.getsockname()
+        if self._state != self.CLOSED:
+            raise Exception("worng state:", self._state)
+        self.dst_addr = dst_addr
+        self._send(SYN=1) # 发起连接
+        self._state = self.SYN_SENT
+        while True:
+            ip, tcp, addr, data = self._recv()
+            if self._state == self.SYN_SENT and tcp.get_SYN() and tcp.get_ACK():
+                self._seq += 1
+                self._ack = tcp.get_th_seq() + 1
+                self._send(ACK=1)
+                self._state = self.ESTABLISHED
+                return
+
     def close(self):
         # 主动断开连接
         self._send(ACK=1, FIN=1)
@@ -57,7 +74,7 @@ class RawSocket():
             ip, tcp, addr, data = self._recv()
             if self._state == self.FIN_WAIT_1 and tcp.get_ACK():
                 self._state = self.FIN_WAIT_2
-            if self._state == self.FIN_WAIT_2 and tcp.get_FIN():
+            if self._state in [self.FIN_WAIT_1, self.FIN_WAIT_2] and tcp.get_FIN():
                 self._ack = tcp.get_th_seq() + 1
                 self._send(ACK=1)
                 self._state = self.TIME_WAIT
@@ -181,6 +198,7 @@ class RawSocket():
         return ip, tcp
 
 if __name__ == '__main__':
+    '''server
     server = RawSocket()
     server.bind(('127.0.0.1', 1234))
     addr = server.accept()
@@ -192,4 +210,7 @@ if __name__ == '__main__':
             server.send(msg)
             print(msg)
     print('bye....')
+    '''
+    client = RawSocket()
+    client.connect(('127.0.0.1', 1234))
     

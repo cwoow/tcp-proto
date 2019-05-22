@@ -1,2 +1,3 @@
 .vscode
 *.pcapng
+__pycache__/
