@@ -103,7 +103,9 @@ class RawSocket():
         msg = b''
         while True:
             if not self._state == self.ESTABLISHED:
-                raise Exception('no connection', self._state)
+                #raise Exception('disconnected', self._state)
+                print('disconnected...')
+                return b''
             ip, tcp, addr, data = self._recv()
             #print(data, len(data))
             ip_len = ip.get_size()
@@ -119,7 +121,6 @@ class RawSocket():
         return msg
 
     def send(self, msg):
-        
         if msg is not None:
             if isinstance(msg, str):
                 msg = msg.encode()

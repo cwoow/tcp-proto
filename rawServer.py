@@ -7,7 +7,5 @@ print('connected ...\n ')
 while server.isOpen():
     msg = server.recv()
     if msg:
-        print(msg)
         server.send(msg)
-        print(msg)
 print('bye....')

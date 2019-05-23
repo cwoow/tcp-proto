@@ -7,11 +7,13 @@ server.listen()
 
 while True:
     print('###')
+    print(dir(server))
     conn, addr = server.accept()
+    print(dir(server))
     print("new connection:", addr)
     while True:
         data = conn.recv(4096)
+        print(data)
         if not data:
             break
-        print(data)
         conn.send(data)

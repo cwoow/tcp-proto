@@ -13,3 +13,5 @@
 
 * wireshark
     * tcp.port == 1234 && tcp.flags.reset==0
+
+* tcpServer 断开连接的时候没有马上发FIN-ACK，
