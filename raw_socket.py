@@ -1,9 +1,13 @@
+#!/usr/bin python3
+# -*- coding: utf-8 -*-
+"""raw socket"""
 import time
 import socket
 
 from impacket.ImpactPacket import IP, TCP, Data
 
-class RawSocket():
+class RawSocket:
+    """raw socket"""
     CLOSED = 0          # 初始状态
     LISTEN = 1          # 服务端监听状态，等待客户端连接
     SYN_SENT = 2        # 客户端发起连接，发送SYN报文
@@ -16,8 +20,8 @@ class RawSocket():
     CLOSE_WAIT = 9      # 已回复FIN-ACK，等待程序处理完后发FIN
     LAST_ACK = 10       # 等待主动关闭端的FIN-ACk
 
-    def __init__(self, family=socket.AF_INET, type=socket.SOCK_RAW, proto=socket.IPPROTO_TCP):
-        self.sock = socket.socket(family, type, proto)
+    def __init__(self, family=socket.AF_INET, typ=socket.SOCK_RAW, proto=socket.IPPROTO_TCP):
+        self.sock = socket.socket(family, typ, proto)
         self.sock.setsockopt(socket.SOL_IP, socket.IP_HDRINCL, 1)
         self.src_addr = None
         self.dst_addr = None
@@ -25,16 +29,23 @@ class RawSocket():
         self._seq = 0
         self._ack = 0
 
-    def isOpen(self):
+    def isopen(self):
+        """是否连接状态"""
         return self._state == self.ESTABLISHED
 
-    def bind(self, addr):
-        self.sock.bind(addr)
-        self.src_addr = tuple(addr)
-        self._state = self.LISTEN
+    def bind(self, addr=None):
+        """绑定端口"""
+        if addr:
+            self.sock.bind(addr)
+            self.src_addr = tuple(addr)
+            self._state = self.LISTEN
+        else:
+            self.sock.bind(('127.0.0.1', 0)) # bind端口0，系统会自动分配一个端口
+            self.src_addr = self.sock.getsockname()
+
 
     def accept(self):
-        # 等待客户端连接, 三次握手
+        """等待客户端连接, 三次握手"""
         if self._state != self.LISTEN:
             raise Exception("worng state:", self._state)
         while True:
@@ -45,13 +56,14 @@ class RawSocket():
                 self._send(SYN=1, ACK=1)
                 self._seq += 1  # 消耗一个seq
                 self._state = self.SYN_RCVD
-            if self._state == self.SYN_RCVD and tcp.get_ACK() and tcp.get_th_seq() == self._ack:  # 连接成功
+            if self._state == self.SYN_RCVD and tcp.get_ACK() \
+                    and tcp.get_th_seq() == self._ack:  # 连接成功
                 self._state = self.ESTABLISHED
                 return addr
 
     def connect(self, dst_addr):
-        self.sock.bind(('127.0.0.1', 0)) # bind端口0，系统会自动分配一个端口
-        self.src_addr = self.sock.getsockname()
+        """连接到服务器"""
+        self.bind()
         if self._state != self.CLOSED:
             raise Exception("worng state:", self._state)
         self.dst_addr = dst_addr
@@ -67,7 +79,7 @@ class RawSocket():
                 return
 
     def close(self):
-        # 主动断开连接
+        """主动断开连接"""
         self._send(ACK=1, FIN=1)
         self._state = self.FIN_WAIT_1
         while True:
@@ -84,7 +96,7 @@ class RawSocket():
                 return
 
     def beclose(self, ip, tcp, addr, data):
-        # 被动断开连接
+        """被动断开连接"""
         ack = tcp.get_th_seq()
         self._send(ACK=1)
         self._state = self.CLOSE_WAIT
@@ -97,9 +109,9 @@ class RawSocket():
                 print("closed...")
                 #raise Exception('closed!')
                 return
-        
 
     def recv(self):
+        """tcp接收数据"""
         msg = b''
         while True:
             if not self._state == self.ESTABLISHED:
@@ -121,6 +133,7 @@ class RawSocket():
         return msg
 
     def send(self, msg):
+        """tcp发送数据"""
         if msg is not None:
             if isinstance(msg, str):
                 msg = msg.encode()
@@ -134,9 +147,9 @@ class RawSocket():
                 else:
                     time.sleep(1)
             self._seq += len(msg)
-            
 
     def watchon(func):
+        """修饰器，检查连接状态"""
         def wraper(self, *args, **kws):
             ip, tcp, addr, data = func(self, *args, **kws)
             if self._state == self.ESTABLISHED and tcp.get_FIN():
@@ -147,6 +160,7 @@ class RawSocket():
 
     @watchon
     def _recv(self):
+        """socket接收数据"""
         while True:
             data, addr = self.sock.recvfrom(4096)
             ip = IP(data)
@@ -161,6 +175,7 @@ class RawSocket():
             return ip, tcp, addr, data
 
     def _send(self, msg=None, win=10, SYN=0, ACK=0, PSH=0, FIN=0):
+        """socket发送数据"""
         ip, tcp = self.init_head()
         tcp.set_th_win(win)   #这个很重要
         tcp.set_th_seq(self._seq)
@@ -179,20 +194,23 @@ class RawSocket():
         buf = ip.get_packet()
         print("send ", tcp, tcp.get_th_seq(), tcp.get_th_ack())
         self.sock.sendto(buf, self.dst_addr)
-        
+
     def init_ip(self):
+        """初始化ip头"""
         ip = IP()
         ip.set_ip_src(self.src_addr[0])
         ip.set_ip_dst(self.dst_addr[0])
         return ip
 
     def init_tcp(self):
+        """初始化tcp头"""
         tcp = TCP()
         tcp.set_th_sport(self.src_addr[1])
         tcp.set_th_dport(self.dst_addr[1])
         return tcp
 
     def init_head(self):
+        """初始化头"""
         ip = self.init_ip()
         tcp = self.init_tcp()
         ip.contains(tcp)
@@ -204,7 +222,7 @@ if __name__ == '__main__':
     server.bind(('127.0.0.1', 1234))
     addr = server.accept()
     print('connected ...\n ')
-    while server.isOpen():
+    while server.isopen():
         msg = server.recv()
         if msg:
             print(msg)
@@ -214,4 +232,3 @@ if __name__ == '__main__':
     '''
     client = RawSocket()
     client.connect(('127.0.0.1', 1234))
-    

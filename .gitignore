@@ -1,3 +1,4 @@
 .vscode
+XDG_CACHE_HOME
 *.pcapng
 __pycache__/
