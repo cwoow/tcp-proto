@@ -149,6 +149,9 @@ class IP(BufferMap):
         self.tcp = tcp
         tcp.ip = self
 
+    def get_header_size(self):
+        return self.get_hlen() * 4
+
     def set_ip_src(self, ip):
         self.setb('src', socket.inet_aton(ip))
 
@@ -237,6 +240,9 @@ class TCP(BufferMap):
     def contains(self, data):
         self.data = data
 
+    def get_header_size(self):
+        return self.get_idx() * 4
+
     def get_size(self):
         size = len(self.buf)
         size += len(self.data.buf)
@@ -263,7 +269,7 @@ class TCP(BufferMap):
         s = 'TCP '
         for flag in ['FIN', 'SYN', 'RST', 'PSH', 'ACK', 'URG']:
             if self.get(flag):
-                s = s +  flag + ' '
+                s = s +  flag.lower() + ' '
         s = s + str(self.get_src()) + '->' + str(self.get_dst())
         data = self.data.get_bytes()
         if data:

@@ -9,10 +9,9 @@
     * iptables -A OUTPUT -p tcp -dport 50000 --tcp-flags RST RST -j DROP
     -I 插入(insert)规则 -A 添加(append)规则 -D 删除(delete)规则
 
-* 收到 seq=3425881730、2852968954 相当于 seq=0 ?
-
 * wireshark
     * tcp.port == 1234 && tcp.flags.reset==0
+    * wireshark显示的seq,ack是相对于第一个报文的相对值
 
 * tcpServer 断开连接的时候没有马上发FIN-ACK，
 

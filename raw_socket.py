@@ -4,7 +4,8 @@
 import time
 import socket
 
-from impacket.ImpactPacket import IP, TCP, Data
+#from impacket.ImpactPacket import IP, TCP, Data
+from socketHead import IP, TCP, Data
 
 class RawSocket:
     """raw socket"""
@@ -52,12 +53,12 @@ class RawSocket:
             ip, tcp, addr, data = self._recv()
             if self._state == self.LISTEN and tcp.get_SYN():    # 开始握手
                 self.dst_addr = tuple(addr)
-                self._ack = tcp.get_th_seq()+1  # 消耗一个ack
+                self._ack = tcp.get_seq()+1  # 消耗一个ack
                 self._send(SYN=1, ACK=1)
                 self._seq += 1  # 消耗一个seq
                 self._state = self.SYN_RCVD
             if self._state == self.SYN_RCVD and tcp.get_ACK() \
-                    and tcp.get_th_seq() == self._ack:  # 连接成功
+                    and tcp.get_seq() == self._ack:  # 连接成功
                 self._state = self.ESTABLISHED
                 return addr
 
@@ -73,7 +74,7 @@ class RawSocket:
             ip, tcp, addr, data = self._recv()
             if self._state == self.SYN_SENT and tcp.get_SYN() and tcp.get_ACK():
                 self._seq += 1
-                self._ack = tcp.get_th_seq() + 1
+                self._ack = tcp.get_seq() + 1
                 self._send(ACK=1)
                 self._state = self.ESTABLISHED
                 return
@@ -87,7 +88,7 @@ class RawSocket:
             if self._state == self.FIN_WAIT_1 and tcp.get_ACK():
                 self._state = self.FIN_WAIT_2
             if self._state in [self.FIN_WAIT_1, self.FIN_WAIT_2] and tcp.get_FIN():
-                self._ack = tcp.get_th_seq() + 1
+                self._ack = tcp.get_seq() + 1
                 self._send(ACK=1)
                 self._state = self.TIME_WAIT
                 time.sleep(1)
@@ -97,7 +98,7 @@ class RawSocket:
 
     def beclose(self, ip, tcp, addr, data):
         """被动断开连接"""
-        ack = tcp.get_th_seq()
+        ack = tcp.get_seq()
         self._send(ACK=1)
         self._state = self.CLOSE_WAIT
         self._send(ACK=1, FIN=1)
@@ -120,13 +121,13 @@ class RawSocket:
                 return b''
             ip, tcp, addr, data = self._recv()
             #print(data, len(data))
-            ip_len = ip.get_size()
-            tcp_len = tcp.get_size()
+            ip_len = ip.get_header_size()
+            tcp_len = tcp.get_header_size()
             head_len = (ip_len+tcp_len)
             msg += data[head_len:]
             data_len = len(data) - head_len
             #print(msg)
-            self._ack = tcp.get_th_seq() + data_len
+            self._ack = tcp.get_seq() + data_len
             self._send(ACK=1)
             if tcp.get_PSH():
                 break
@@ -142,7 +143,7 @@ class RawSocket:
             while True:
                 self._send(msg, ACK=1, PSH=1)
                 ip, tcp, addr, data = self._recv()
-                if tcp.get_ACK() and tcp.get_th_ack() == self._seq+len(msg):
+                if tcp.get_ACK() and tcp.get_ack() == self._seq+len(msg):
                     break
                 else:
                     time.sleep(1)
@@ -164,35 +165,35 @@ class RawSocket:
         while True:
             data, addr = self.sock.recvfrom(4096)
             ip = IP(data)
-            ip_len = ip.get_size()
+            ip_len = ip.get_header_size()
             tcp = TCP(data[ip_len:])
-            if tcp.get_th_dport() != self.src_addr[1]:
+            if tcp.get_dst() != self.src_addr[1]:
                 continue
-            addr = (ip.get_ip_src(), tcp.get_th_sport())
+            addr = (ip.get_ip_src(), tcp.get_src())
             if self.dst_addr is not None and self.dst_addr != tuple(addr):
                 continue
-            print('recv ', tcp, tcp.get_th_seq(), tcp.get_th_ack())
+            print('recv ', tcp, tcp.get_seq(), tcp.get_ack())
             return ip, tcp, addr, data
 
     def _send(self, msg=None, win=10, SYN=0, ACK=0, PSH=0, FIN=0):
         """socket发送数据"""
         ip, tcp = self.init_head()
-        tcp.set_th_win(win)   #这个很重要
-        tcp.set_th_seq(self._seq)
-        tcp.set_th_ack(self._ack)
+        tcp.set_win(win)   #这个很重要
+        tcp.set_seq(self._seq)
+        tcp.set_ack(self._ack)
         if SYN:
-            tcp.set_SYN()
+            tcp.set_SYN(1)
         if ACK:
-            tcp.set_ACK()
+            tcp.set_ACK(1)
         if PSH:
-            tcp.set_PSH()
+            tcp.set_PSH(1)
         if FIN:
-            tcp.set_FIN()
+            tcp.set_FIN(1)
         if msg is not None:
             data = Data(msg)
             tcp.contains(data)
         buf = ip.get_packet()
-        print("send ", tcp, tcp.get_th_seq(), tcp.get_th_ack())
+        print("send ", tcp, tcp.get_seq(), tcp.get_ack())
         self.sock.sendto(buf, self.dst_addr)
 
     def init_ip(self):
@@ -205,8 +206,8 @@ class RawSocket:
     def init_tcp(self):
         """初始化tcp头"""
         tcp = TCP()
-        tcp.set_th_sport(self.src_addr[1])
-        tcp.set_th_dport(self.dst_addr[1])
+        tcp.set_src(self.src_addr[1])
+        tcp.set_dst(self.dst_addr[1])
         return tcp
 
     def init_head(self):
@@ -232,3 +233,4 @@ if __name__ == '__main__':
     '''
     client = RawSocket()
     client.connect(('127.0.0.1', 1234))
+    #'''
