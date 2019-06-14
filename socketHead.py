@@ -1,6 +1,8 @@
 
 import json
 import math
+import array
+import struct
 from functools import partial
 
 import socket
@@ -9,7 +11,7 @@ class BufferMap():
     fmt = {}
 
     def __init__(self, buf=None, size=20):
-        self.buf = list(buf) if buf else [0]*size
+        self.buf = list(buf) if buf is not None else [0]*size
         for key in self.fmt:
             self.__setattr__('get_'+key, partial(self.get, key))
             self.__setattr__('set_'+key, partial(self.set, key))
@@ -137,12 +139,15 @@ class IP(BufferMap):
         "src":      [12, 0, 4*8],
         "dst":      [16, 0, 4*8],
     }
-    def __init__(self, *args, **kws):
-        BufferMap.__init__(self)
+    def __init__(self, buf=None):
+        if buf is not None:
+            buf = buf[:20]
+        BufferMap.__init__(self, buf)
         self.tcp = None
 
     def contains(self, tcp):
         self.tcp = tcp
+        tcp.ip = self
 
     def set_ip_src(self, ip):
         self.setb('src', socket.inet_aton(ip))
@@ -159,22 +164,43 @@ class IP(BufferMap):
     def get_packet(self):
         if self.get_version() == 0:
             self.set_version(4)
-        if self.get_hlen() == 0:
-            self.set_hlen(len(self.buf)//4)
-        if self.get_len() == 0:
-            l = len(self.buf)
-            if self.tcp:
-                l += len(self.tcp.buf)
-            self.set_len(l)
+        #if self.get_hlen() == 0:
+        self.set_hlen(len(self.buf)//4)
+        #if self.get_len() == 0:
+        l = len(self.buf)
+        if self.tcp:
+            l += self.tcp.get_size()
+        self.set_len(l)
         if self.get_live() == 0:
             self.set_live(255)
         if self.get_proto() == 0 and self.tcp:
-            self.set_proto(self.tcp.get_proto())
+            self.set_proto(self.tcp.protocol)
         
         self.set_sum(0)
         self.set_sum(self.compute_checksum(self.get_bytes()))
 
-        return self.get_bytes()
+        packet = self.get_bytes()
+        if self.tcp:
+            packet += self.tcp.get_packet()
+        return packet
+
+    def get_pseudo_header(self):
+        pseudo_buf = array.array("B")
+        pseudo_buf.extend(self.get_bytes()[12:20])
+        pseudo_buf.fromlist([0])
+        pseudo_buf.extend(self.get_bytes()[9:10])
+
+        tmp_size = self.tcp.get_size()
+        size_str = struct.pack("!H", tmp_size)
+        pseudo_buf.frombytes(size_str)
+
+        return pseudo_buf.tobytes()
+
+    def __str__(self):
+        s = 'IP ' + self.get_ip_src() + ' -> ' + self.get_ip_dst()
+        if self.tcp:
+            s = s + '\n' + str(self.tcp)
+        return s
 
 ''' tcp头
 源端口 目的端口 序号  确认号       数据偏移     保留 
@@ -184,6 +210,7 @@ class IP(BufferMap):
 [13b 2    3   4   5   6   7 ] [14-15] [16-17] [18-19] [最长40]
 '''
 class TCP(BufferMap):
+    protocol = 6
     fmt = {
         "src": [0, 0, 2*8],
         "dst": [2, 0, 2*8],
@@ -200,19 +227,57 @@ class TCP(BufferMap):
         "sum": [16, 0, 2*8],
         "upt": [18, 0, 2*8],
     }
+    def __init__(self, buf=None):
+        if buf is not None:
+            buf = buf[:20]
+        BufferMap.__init__(self, buf)
+        self.ip = None
+        self.data = Data()
 
-    def checksum(self, ipbuf):
-        self.set('sum', 0)
-        buf = ipbuf + bytes(self.buf[0:20])
-        sum = 0
-        i = 0
-        while i < len(buf):
-            sum += self.btoi(buf[i:i+2])
-            i += 2
-        self.set('sum', sum)
+    def contains(self, data):
+        self.data = data
+
+    def get_size(self):
+        size = len(self.buf)
+        size += len(self.data.buf)
+        return size
+
+    def get_packet(self):
+        self.set_idx(len(self.buf)//4)
+        if self.get_win() == 0:
+            self.set_win(65535)
+        self.set_sum(self.checksum())
+
+        return self.get_bytes() + self.data.get_bytes()
+
+    def checksum(self):
+        self.set_sum(0)
+        buf = self.ip.get_pseudo_header()
+        buf += self.get_bytes()
+        buf += self.data.get_bytes()
+
+        sum = self.compute_checksum(buf)
+        return sum
+
+    def __str__(self):
+        s = 'TCP '
+        for flag in ['FIN', 'SYN', 'RST', 'PSH', 'ACK', 'URG']:
+            if self.get(flag):
+                s = s +  flag + ' '
+        s = s + str(self.get_src()) + '->' + str(self.get_dst())
+        data = self.data.get_bytes()
+        if data:
+            s = s + '\n' + str(data)
+        return s
+
+class Data(BufferMap):
+    def __init__(self, data=b''):
+        BufferMap.__init__(self, data)
 
 if __name__ == '__main__':
     import unittest
+    import warnings
+    # warnings.simplefilter("ignore", DeprecationWarning)
     class BufferTest(BufferMap, unittest.TestCase):
         fmt = {
             "a": [0, 0, 4],
@@ -243,10 +308,10 @@ if __name__ == '__main__':
             self.setb('c', b'e')
             self.assertEqual(self.getb('c'), b'e')
 
-    from impacket.ImpactPacket import IP as im_IP, TCP as im_TCP
+    from impacket.ImpactPacket import IP as im_IP, TCP as im_TCP, Data as im_Data
     class IPTest(unittest.TestCase):
 
-        def test_packet(self):
+        def test_ip(self):
             ip = IP()
             ip.set_ip_src('127.0.0.1')
             ip.set_ip_dst('127.0.0.1')
@@ -254,6 +319,51 @@ if __name__ == '__main__':
             im_ip.set_ip_src('127.0.0.1')
             im_ip.set_ip_dst('127.0.0.1')
             self.assertEqual(ip.get_packet(), im_ip.get_packet())
+
+    class TCPTest(unittest.TestCase):
+
+        def test_tcp(self):
+            ip = IP()
+            ip.set_ip_src('127.0.0.1')
+            ip.set_ip_dst('127.0.0.1')
+            tcp = TCP()
+            tcp.set_src(0xaaaa)
+            tcp.set_dst(0xbbbb)
+            tcp.set_win(65535)
+            tcp.set_SYN(1)
+            tcp.set_seq(123)
+            data = Data(b'hello world')
+            tcp.contains(data)
+            ip.contains(tcp)
+
+            im_ip = im_IP()
+            im_ip.set_ip_src('127.0.0.1')
+            im_ip.set_ip_dst('127.0.0.1')
+            im_tcp = im_TCP()
+            im_tcp.set_th_sport(0xaaaa)
+            im_tcp.set_th_dport(0xbbbb)
+            im_tcp.set_th_win(65535)
+            im_tcp.set_SYN()
+            im_tcp.set_th_seq(123)
+            im_data = im_Data(b'hello world')
+            im_tcp.contains(im_data)
+            im_ip.contains(im_tcp)
+
+            print(im_ip.get_packet())
+            print(ip.get_packet())
+            self.assertEqual(ip.get_packet(), im_ip.get_packet())
+
+            buf = ip.get_packet()
+            ip1 = IP(buf)
+            tcp1 = TCP(buf[20:])
+            data1 = Data(buf[40:])
+            tcp1.contains(data1)
+            ip1.contains(tcp1)
+            self.assertEqual(ip.get_packet(), ip1.get_packet())
+
+            print(ip)
+            print(im_ip)
+
 
     unittest.main()
 
